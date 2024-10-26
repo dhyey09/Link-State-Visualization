@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Link State Routing Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f0f2f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        #network {
+            width: 100%;
+            height: 500px;
+            border: 1px solid #ddd;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .controls {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .control-group {
+            margin: 10px 0;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .results {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .step-display {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 4px;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        button.remove {
+            background-color: #f44336;
+        }
+        
+        button.remove:hover {
+            background-color: #da190b;
+        }
+        
+        input, select {
+            padding: 6px;
+            margin: 4px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .step-card {
+            background-color: white;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .step-card h4 {
+            margin: 0 0 10px 0;
+            color: #2196F3;
+        }
+        
+        .step-detail {
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+        
+        .network-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .layout-controls {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="controls">
+            <h2>Network Configuration</h2>
+            <div class="control-group">
+                <label>Add Router:</label>
+                <input type="text" id="routerName" placeholder="Router name">
+                <button onclick={addRouter()}>Add Router</button>
+            </div>
+            
+            <div class="control-group">
+                <label>Add Link:</label>
+                <select id="source"></select>
+                <select id="target"></select>
+                <input type="number" id="cost" placeholder="Cost" min="1">
+                <button onclick="addLink()">Add Link</button>
+            </div>
+            
+            <div class="control-group">
+                <label>Remove Elements:</label>
+                <select id="removeRouter"></select>
+                <button class="remove" onclick="removeRouter()">Remove Router</button>
+                <select id="removeLink"></select>
+                <button class="remove" onclick="removeLink()">Remove Link</button>
+            </div>
+            
+            <div class="control-group">
+                <label>Source Router:</label>
+                <select id="sourceRouter"></select>
+                <button onclick="calculatePaths()">Calculate Shortest Paths</button>
+            </div>
+            
+            <div class="layout-controls">
+                <label>Layout Style:</label>
+                <select id="layoutStyle" onchange="updateLayout()">
+                    <option value="standard">Standard</option>
+                    <option value="hierarchical">Hierarchical</option>
+                    <option value="circular">Circular</option>
+                </select>
+                
+                <button onclick="resetLayout()">Reset Layout</button>
+                <button onclick="clearNetwork()">Clear Network</button>
+            </div>
+        </div>
+
+        <div id="network"></div>
+
+        <div class="results">
+            <h2>Results</h2>
+            <div id="pathResults"></div>
+            <div class="step-display">
+                <h3>Algorithm Steps</h3>
+                <div id="stepHistory"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let network;
+        let nodes = new vis.DataSet();
+        let edges = new vis.DataSet();
+        let networkData = {
+            nodes: nodes,
+            edges: edges
+        };
+        
+        // Network visualization options
+        // Replace the layouts object in the script
+const layouts = {
+    standard: {
+        physics: {
+            enabled: true,
+            solver: 'forceAtlas2Based',
+            forceAtlas2Based: {
+                gravitationalConstant: -26,
+                centralGravity: 0.005,
+                springLength: 230,
+                springConstant: 0.18
+            }
+        }
+    },
+    hierarchical: {
+        physics: false,
+        layout: {
+            hierarchical: {
+                direction: 'UD',
+                sortMethod: 'hubsize',
+                nodeSpacing: 150
+            }
+        }
+    },
+    circular: {
+        physics: {
+            enabled: false
+        },
+        layout: {
+            randomSeed: 2,
+            improvedLayout: true
+        }
+    }
+};
+        
+        function initNetwork() {
+            let container = document.getElementById('network');
+            let options = {
+                ...layouts.standard,
+                nodes: {
+                    shape: 'circle',
+                    size: 25,
+                    font: {
+                        size: 14,
+                        color: '#ffffff'
+                    },
+                    color: {
+                        background: '#4CAF50',
+                        border: '#45a049',
+                        highlight: {
+                            background: '#45a049',
+                            border: '#397d3b'
+                        }
+                    }
+                },
+                edges: {
+                    font: {
+                        size: 12,
+                        align: 'middle'
+                    },
+                    width: 2,
+                    color: {
+                        color: '#848484',
+                        highlight: '#2196F3'
+                    },
+                    arrows: {
+                        to: {
+                            enabled: false
+                        }
+                    }
+                }
+            };
+            network = new vis.Network(container, networkData, options);
+            
+            // Add event listener for stabilized event
+            network.on('stabilized', function() {
+                console.log('Network has been stabilized');
+            });
+        }
+    
+        function updateLayout() {
+            const layoutStyle = document.getElementById('layoutStyle').value;
+            network.setOptions(layouts[layoutStyle]);
+        }
+    
+        function resetLayout() {
+            network.setOptions(layouts.standard);
+            network.stabilize();
+        }
+    
+        function clearNetwork() {
+            if (confirm('Are you sure you want to clear the entire network?')) {
+                nodes.clear();
+                edges.clear();
+                updateSelects();
+            }
+        }
+    
+        function addRouter() {
+            let name = document.getElementById('routerName').value;
+            if (name && !nodes.get(name)) {
+                nodes.add({
+                    id: name,
+                    label: name,
+                    title: `Router ${name}`
+                });
+                updateSelects();
+                document.getElementById('routerName').value = '';
+            }
+        }
+    
+        function removeRouter() {
+            let routerName = document.getElementById('removeRouter').value;
+            if (routerName) {
+                nodes.remove(routerName);
+                // Remove associated edges
+                edges.get().forEach(edge => {
+                    if (edge.from === routerName || edge.to === routerName) {
+                        edges.remove(edge.id);
+                    }
+                });
+                updateSelects();
+            }
+        }
+    
+        function addLink() {
+            let source = document.getElementById('source').value;
+            let target = document.getElementById('target').value;
+            let cost = parseInt(document.getElementById('cost').value);
+            
+            if (source && target && cost && source !== target) {
+                let edgeId = `${source}-${target}`;
+                let reverseEdgeId = `${target}-${source}`;
+                
+                if (!edges.get(edgeId) && !edges.get(reverseEdgeId)) {
+                    edges.add({
+                        id: edgeId,
+                        from: source,
+                        to: target,
+                        label: cost.toString(),
+                        cost: cost,
+                        title: `Cost: ${cost}`
+                    });
+                    updateSelects();
+                    document.getElementById('cost').value = '';
+                }
+            }
+        }
+    
+        function removeLink() {
+            let linkId = document.getElementById('removeLink').value;
+            if (linkId) {
+                edges.remove(linkId);
+                updateSelects();
+            }
+        }
+    
+        function updateSelects() {
+            let routersList = nodes.get().map(node => node.id);
+            let linksList = edges.get().map(edge => ({
+                id: edge.id,
+                text: `${edge.from} ↔ ${edge.to} (${edge.label})`
+            }));
+            
+            // Update router selects
+            ['source', 'target', 'sourceRouter', 'removeRouter'].forEach(selectId => {
+                let select = document.getElementById(selectId);
+                select.innerHTML = '';
+                routersList.forEach(router => {
+                    let option = document.createElement('option');
+                    option.value = router;
+                    option.text = router;
+                    select.appendChild(option);
+                });
+            });
+            
+            // Update link select
+            let linkSelect = document.getElementById('removeLink');
+            linkSelect.innerHTML = '';
+            linksList.forEach(link => {
+                let option = document.createElement('option');
+                option.value = link.id;
+                option.text = link.text;
+                linkSelect.appendChild(option);
+            });
+        }
+    
+        function displayResults(data) {
+            // Display paths and distances
+            let resultsHtml = '<h3>Shortest Paths from Source:</h3>';
+            for (let target in data.paths) {
+                const pathInfo = data.paths[target];
+                if (pathInfo.path.length > 0) {  // Only show if there is a path
+                    resultsHtml += `
+                        <div class="step-card">
+                            <h4>Path to ${target}</h4>
+                            <div class="step-detail">Route: ${pathInfo.path.join(' → ')}</div>
+                            <div class="step-detail">Total Cost: ${pathInfo.cost}</div>
+                            <div class="step-detail">Number of Hops: ${pathInfo.hops}</div>
+                        </div>`;
+                }
+            }
+            document.getElementById('pathResults').innerHTML = resultsHtml;
+        
+            // Display algorithm steps
+            let stepsHtml = '';
+            data.history.forEach((step, index) => {
+                stepsHtml += `
+                    <div class="step-card">
+                        <h4>Step ${index + 1}: Processing Router ${step.current}</h4>
+                        <div class="step-detail">Current Distances:</div>
+                        <div class="step-detail">
+                            ${Object.entries(step.distances)
+                                .map(([router, dist]) => `${router}: ${dist}`)
+                                .join(', ')}
+                        </div>
+                        <div class="step-detail">Visited Nodes: ${step.visited.join(', ')}</div>
+                        ${Object.keys(step.neighbors).length > 0 ? `
+                            <div class="step-detail">Evaluating Neighbors:</div>
+                            ${Object.entries(step.neighbors)
+                                .map(([neighbor, info]) => `
+                                    <div class="step-detail">
+                                        → ${neighbor}: Cost=${info.cost}, 
+                                        New Distance=${info.total_distance}, 
+                                        Current Best=${info.current_best}
+                                    </div>`)
+                                .join('')}
+                        ` : ''}
+                    </div>`;
+            });
+            document.getElementById('stepHistory').innerHTML = stepsHtml;
+        
+            // Highlight paths in the visualization
+            highlightPaths(data.paths);
+        }
+    
+        function highlightPaths(paths) {
+            // Reset all edges and nodes
+            edges.get().forEach(edge => {
+                edges.update({
+                    id: edge.id,
+                    color: { color: '#848484' },
+                    width: 2
+                });
+            });
+            
+            nodes.get().forEach(node => {
+                nodes.update({
+                    id: node.id,
+                    color: {
+                        background: '#4CAF50',
+                        border: '#45a049'
+                    }
+                });
+            });
+    
+            // Highlight paths with different colors
+            const colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00'];
+            let colorIndex = 0;
+            
+            for (let target in paths) {
+                const path = paths[target].path;
+                const pathColor = colors[colorIndex % colors.length];
+                
+                // Highlight nodes in the path
+                path.forEach(router => {
+                    nodes.update({
+                        id: router,
+                        color: {
+                            background: pathColor,
+                            border: pathColor
+                        }
+                    });
+                });
+    
+                // Highlight edges in the path
+                for (let i = 0; i < path.length - 1; i++) {
+                    const edgeId = `${path[i]}-${path[i+1]}`;
+                    const reverseEdgeId = `${path[i+1]}-${path[i]}`;
+                    const actualEdgeId = edges.get(edgeId) ? edgeId : reverseEdgeId;
+                    
+                    edges.update({
+                        id: actualEdgeId,
+                        color: { color: pathColor },
+                        width: 4
+                    });
+                }
+                
+                colorIndex++;
+            }
+        }
+    
+        function calculatePaths() {
+            let source = document.getElementById('sourceRouter').value;
+            if (!source) {
+                alert('Please select a source router');
+                return;
+            }
+            
+            // Check if there are any routers and links
+            if (nodes.get().length === 0) {
+                alert('Please add some routers to the network');
+                return;
+            }
+            
+            if (edges.get().length === 0) {
+                alert('Please add some links between routers');
+                return;
+            }
+            
+            let networkData = {
+                routers: nodes.get().map(node => node.id),
+                links: edges.get().map(edge => ({
+                    source: edge.from,
+                    target: edge.to,
+                    cost: parseInt(edge.label)
+                })),
+                source: source
+            };
+        
+            fetch('/calculate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(networkData)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Received data:', data);  // Debug log
+                displayResults(data);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while calculating paths: ' + error.message);
+            });
+        }
+    
+        // Initialize the network when the page loads
+        window.addEventListener('load', () => {
+            initNetwork();
+            updateSelects();
+        });
+    </script>
