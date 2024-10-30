@@ -145,6 +145,13 @@
                 <button onclick="calculatePaths()">Calculate Shortest Paths</button>
             </div>
             
+            <div class="control-group">
+                <button onclick="startLSRProcess()">Start LSR Process</button>
+                <button onclick="showNeighborDiscovery()">Show Neighbor Discovery</button>
+                <button onclick="showFlooding()">Show LSP Flooding</button>
+                <button onclick="showRoutingTables()">Show Routing Tables</button>
+            </div>
+
             <div class="layout-controls">
                 <label>Layout Style:</label>
                 <select id="layoutStyle" onchange="updateLayout()">
@@ -156,7 +163,7 @@
                 <button onclick="resetLayout()">Reset Layout</button>
                 <button onclick="clearNetwork()">Clear Network</button>
             </div>
-        </div>
+        </div>      
 
         <div id="network"></div>
 
@@ -179,41 +186,39 @@
             edges: edges
         };
         
-        // Network visualization options
-        // Replace the layouts object in the script
-const layouts = {
-    standard: {
-        physics: {
-            enabled: true,
-            solver: 'forceAtlas2Based',
-            forceAtlas2Based: {
-                gravitationalConstant: -26,
-                centralGravity: 0.005,
-                springLength: 230,
-                springConstant: 0.18
-            }
-        }
-    },
-    hierarchical: {
-        physics: false,
-        layout: {
+        const layouts = {
+            standard: {
+                physics: {
+                    enabled: true,
+                    solver: 'forceAtlas2Based',
+                    forceAtlas2Based: {
+                        gravitationalConstant: -26,
+                        centralGravity: 0.005,
+                        springLength: 230,
+                        springConstant: 0.18
+                    }
+                }
+            },
             hierarchical: {
-                direction: 'UD',
-                sortMethod: 'hubsize',
-                nodeSpacing: 150
+                physics: false,
+                layout: {
+                    hierarchical: {
+                        direction: 'UD',
+                        sortMethod: 'hubsize',
+                        nodeSpacing: 150
+                    }
+                }
+            },
+            circular: {
+                physics: {
+                    enabled: false
+                },
+                layout: {
+                    randomSeed: 2,
+                    improvedLayout: true
+                }
             }
-        }
-    },
-    circular: {
-        physics: {
-            enabled: false
-        },
-        layout: {
-            randomSeed: 2,
-            improvedLayout: true
-        }
-    }
-};
+        };
         
         function initNetwork() {
             let container = document.getElementById('network');
@@ -254,7 +259,6 @@ const layouts = {
             };
             network = new vis.Network(container, networkData, options);
             
-            // Add event listener for stabilized event
             network.on('stabilized', function() {
                 console.log('Network has been stabilized');
             });
@@ -295,7 +299,6 @@ const layouts = {
             let routerName = document.getElementById('removeRouter').value;
             if (routerName) {
                 nodes.remove(routerName);
-                // Remove associated edges
                 edges.get().forEach(edge => {
                     if (edge.from === routerName || edge.to === routerName) {
                         edges.remove(edge.id);
@@ -344,7 +347,6 @@ const layouts = {
                 text: `${edge.from} ↔ ${edge.to} (${edge.label})`
             }));
             
-            // Update router selects
             ['source', 'target', 'sourceRouter', 'removeRouter'].forEach(selectId => {
                 let select = document.getElementById(selectId);
                 select.innerHTML = '';
@@ -356,7 +358,6 @@ const layouts = {
                 });
             });
             
-            // Update link select
             let linkSelect = document.getElementById('removeLink');
             linkSelect.innerHTML = '';
             linksList.forEach(link => {
@@ -368,11 +369,10 @@ const layouts = {
         }
     
         function displayResults(data) {
-            // Display paths and distances
             let resultsHtml = '<h3>Shortest Paths from Source:</h3>';
             for (let target in data.paths) {
                 const pathInfo = data.paths[target];
-                if (pathInfo.path.length > 0) {  // Only show if there is a path
+                if (pathInfo.path.length > 0) {
                     resultsHtml += `
                         <div class="step-card">
                             <h4>Path to ${target}</h4>
@@ -384,7 +384,6 @@ const layouts = {
             }
             document.getElementById('pathResults').innerHTML = resultsHtml;
         
-            // Display algorithm steps
             let stepsHtml = '';
             data.history.forEach((step, index) => {
                 stepsHtml += `
@@ -412,12 +411,10 @@ const layouts = {
             });
             document.getElementById('stepHistory').innerHTML = stepsHtml;
         
-            // Highlight paths in the visualization
             highlightPaths(data.paths);
         }
     
         function highlightPaths(paths) {
-            // Reset all edges and nodes
             edges.get().forEach(edge => {
                 edges.update({
                     id: edge.id,
@@ -436,7 +433,6 @@ const layouts = {
                 });
             });
     
-            // Highlight paths with different colors
             const colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00'];
             let colorIndex = 0;
             
@@ -444,7 +440,6 @@ const layouts = {
                 const path = paths[target].path;
                 const pathColor = colors[colorIndex % colors.length];
                 
-                // Highlight nodes in the path
                 path.forEach(router => {
                     nodes.update({
                         id: router,
@@ -455,7 +450,6 @@ const layouts = {
                     });
                 });
     
-                // Highlight edges in the path
                 for (let i = 0; i < path.length - 1; i++) {
                     const edgeId = `${path[i]}-${path[i+1]}`;
                     const reverseEdgeId = `${path[i+1]}-${path[i]}`;
@@ -479,7 +473,6 @@ const layouts = {
                 return;
             }
             
-            // Check if there are any routers and links
             if (nodes.get().length === 0) {
                 alert('Please add some routers to the network');
                 return;
@@ -523,6 +516,149 @@ const layouts = {
             });
         }
     
+        // New functions for Link State Routing visualization
+        function startNeighborDiscovery() {
+            fetch('/start_discovery', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    routers: nodes.get().map(node => node.id),
+                    links: edges.get().map(edge => ({
+                        source: edge.from,
+                        target: edge.to,
+                        cost: parseInt(edge.label)
+                    }))
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                displayNeighborDiscoverySteps(data.steps);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred during neighbor discovery: ' + error.message);
+            });
+        }
+    
+        function startLSPFlooding() {
+            fetch('/start_flooding', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    routers: nodes.get().map(node => node.id),
+                    links: edges.get().map(edge => ({
+                        source: edge.from,
+                        target: edge.to,
+                        cost: parseInt(edge.label)
+                    }))
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                displayLSPFloodingSteps(data.steps);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred during LSP flooding: ' + error.message);
+            });
+        }
+    
+        function buildRoutingTables() {
+            fetch('/build_routing_tables', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    routers: nodes.get().map(node => node.id),
+                    links: edges.get().map(edge => ({
+                        source: edge.from,
+                        target: edge.to,
+                        cost: parseInt(edge.label)
+                    }))
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                displayRoutingTables(data.routing_tables);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while building routing tables: ' + error.message);
+            });
+        }
+    
+        function displayNeighborDiscoverySteps(steps) {
+            let stepsHtml = '<h3>Neighbor Discovery Steps:</h3>';
+            steps.forEach((step, index) => {
+                stepsHtml += `
+                    <div class="step-card">
+                        <h4>Step ${index + 1}: Router ${step.router}</h4>
+                        <div class="step-detail">Discovered Neighbors: ${step.discovered_neighbors.join(', ')}</div>
+                        <div class="step-detail">Link Costs: ${Object.entries(step.costs).map(([neighbor, cost]) => `${neighbor}: ${cost}`).join(', ')}</div>
+                    </div>`;
+            });
+            document.getElementById('stepHistory').innerHTML = stepsHtml;
+        }
+    
+        function displayLSPFloodingSteps(steps) {
+            let stepsHtml = '<h3>LSP Flooding Steps:</h3>';
+            steps.forEach((step, index) => {
+                stepsHtml += `
+                    <div class="step-card">
+                        <h4>Step ${index + 1}: LSP from Router ${step.source_router}</h4>
+                        <div class="step-detail">LSP Content: ${JSON.stringify(step.lsp)}</div>
+                        <div class="step-detail">Reached Routers: ${step.reached_routers.join(', ')}</div>
+                    </div>`;
+            });
+            document.getElementById('stepHistory').innerHTML = stepsHtml;
+        }
+    
+        function displayRoutingTables(routingTables) {
+            let tablesHtml = '<h3>Routing Tables:</h3>';
+            for (let router in routingTables) {
+                tablesHtml += `
+                    <div class="step-card">
+                        <h4>Routing Table for ${router}</h4>
+                        <table class="routing-table">
+                            <tr><th>Destination</th><th>Next Hop</th><th>Cost</th></tr>
+                            ${Object.entries(routingTables[router]).map(([dest, info]) => `
+                                <tr>
+                                    <td>${dest}</td>
+                                    <td>${info.next_hop}</td>
+                                    <td>${info.cost}</td>
+                                </tr>
+                            `).join('')}
+                        </table>
+                    </div>`;
+            }
+            document.getElementById('stepHistory').innerHTML = tablesHtml;
+        }
+    
+        function startLSRProcess() {
+            console.log("Starting LSR Process");
+            startNeighborDiscovery();
+            // You might want to chain these calls or use setTimeout to space them out
+            setTimeout(startLSPFlooding, 1000);
+            setTimeout(buildRoutingTables, 2000);
+        }
+        
+        function showNeighborDiscovery() {
+            startNeighborDiscovery();
+        }
+        
+        function showFlooding() {
+            startLSPFlooding();
+        }
+        
+        function showRoutingTables() {
+            buildRoutingTables();
+        }
+        
         // Initialize the network when the page loads
         window.addEventListener('load', () => {
             initNetwork();
