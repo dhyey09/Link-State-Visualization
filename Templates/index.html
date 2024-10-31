@@ -107,10 +107,6 @@
             gap: 10px;
             margin-top: 10px;
         }
-        
-        .layout-controls {
-            margin-top: 10px;
-        }
     </style>
 </head>
 <body>
@@ -143,6 +139,8 @@
                 <label>Source Router:</label>
                 <select id="sourceRouter"></select>
                 <button onclick="calculatePaths()">Calculate Shortest Paths</button>
+                <button onclick="resetLayout()">Reset Layout</button>
+                <button onclick="clearNetwork()">Clear Network</button>
             </div>
             
             <div class="control-group">
@@ -152,17 +150,6 @@
                 <button onclick="showRoutingTables()">Show Routing Tables</button>
             </div>
 
-            <div class="layout-controls">
-                <label>Layout Style:</label>
-                <select id="layoutStyle" onchange="updateLayout()">
-                    <option value="standard">Standard</option>
-                    <option value="hierarchical">Hierarchical</option>
-                    <option value="circular">Circular</option>
-                </select>
-                
-                <button onclick="resetLayout()">Reset Layout</button>
-                <button onclick="clearNetwork()">Clear Network</button>
-            </div>
         </div>      
 
         <div id="network"></div>
@@ -197,25 +184,6 @@
                         springLength: 230,
                         springConstant: 0.18
                     }
-                }
-            },
-            hierarchical: {
-                physics: false,
-                layout: {
-                    hierarchical: {
-                        direction: 'UD',
-                        sortMethod: 'hubsize',
-                        nodeSpacing: 150
-                    }
-                }
-            },
-            circular: {
-                physics: {
-                    enabled: false
-                },
-                layout: {
-                    randomSeed: 2,
-                    improvedLayout: true
                 }
             }
         };
@@ -366,6 +334,76 @@
                 option.text = link.text;
                 linkSelect.appendChild(option);
             });
+        }
+        function animatePacketOnCanvas(sourceId, targetId, isReply) {
+            const positions = network.getPositions([sourceId, targetId]);
+            const sourcePos = positions[sourceId];
+            const targetPos = positions[targetId];
+            
+            // Generate unique ID for the packet
+            const packetId = `packet-${sourceId}-${targetId}-${Date.now()}`;
+            
+            // Set different colors and sizes for hello and reply packets
+            const packetColor = isReply ? '#00FF00' : '#FF0000';  // Green for reply, Red for hello
+            const packetSize = isReply ? 6 : 8;  // Slightly smaller size for reply packets
+            
+            // Create a temporary node for the packet
+            nodes.add({
+                id: packetId,
+                label: '',
+                size: packetSize,
+                shape: 'dot',  // Using dot shape for better visibility
+                color: {
+                    background: packetColor,
+                    border: packetColor,
+                    highlight: {
+                        background: packetColor,
+                        border: packetColor
+                    }
+                },
+                x: sourcePos.x,
+                y: sourcePos.y,
+                physics: false,
+                font: { size: 0 }  // Hide any potential label
+            });
+        
+            // Animation parameters
+            const duration = 1500;
+            const frames = 60;
+            const delay = duration / frames;
+            let frame = 0;
+        
+            // Animation function
+            function animate() {
+                if (frame <= frames) {
+                    const progress = frame / frames;
+                    const x = sourcePos.x + (targetPos.x - sourcePos.x) * progress;
+                    const y = sourcePos.y + (targetPos.y - sourcePos.y) * progress;
+                    
+                    nodes.update({
+                        id: packetId,
+                        x: x,
+                        y: y,
+                        color: {  // Reinforce color during animation
+                            background: packetColor,
+                            border: packetColor,
+                            highlight: {
+                                background: packetColor,
+                                border: packetColor
+                            }
+                        }
+                    });
+        
+                    frame++;
+                    setTimeout(animate, delay);
+                } else {
+                    // Remove the packet node when animation is complete
+                    nodes.remove(packetId);
+                }
+            }
+        
+            // Start animation
+            animate();
         }
     
         function displayResults(data) {
@@ -601,10 +639,22 @@
                         <div class="step-detail">Discovered Neighbors: ${step.discovered_neighbors.join(', ')}</div>
                         <div class="step-detail">Link Costs: ${Object.entries(step.costs).map(([neighbor, cost]) => `${neighbor}: ${cost}`).join(', ')}</div>
                     </div>`;
-            });
-            document.getElementById('stepHistory').innerHTML = stepsHtml;
+            // Animate both hello packets and reply packets with delays
+        step.discovered_neighbors.forEach((neighbor, neighborIndex) => {
+            // Hello packet animation (outgoing) - Red color
+            setTimeout(() => {
+                animatePacketOnCanvas(step.router, neighbor, false);  // Hello packet
+            }, (index * 3000) + (neighborIndex * 2300)); 
+            
+            // Reply packet animation (incoming) - Green color
+            setTimeout(() => {
+                animatePacketOnCanvas(neighbor, step.router, true);  // Reply packet
+            }, (index * 3000) + (neighborIndex * 2000) + 2000);
+        });
+    });
+    document.getElementById('stepHistory').innerHTML = stepsHtml;
         }
-    
+
         function displayLSPFloodingSteps(steps) {
             let stepsHtml = '<h3>LSP Flooding Steps:</h3>';
             steps.forEach((step, index) => {
@@ -614,8 +664,143 @@
                         <div class="step-detail">LSP Content: ${JSON.stringify(step.lsp)}</div>
                         <div class="step-detail">Reached Routers: ${step.reached_routers.join(', ')}</div>
                     </div>`;
+                
+                // Animate LSP flooding from source router
+                animateFloodingStep(step, index);
             });
             document.getElementById('stepHistory').innerHTML = stepsHtml;
+        }
+        
+        function animateFloodingStep(step, stepIndex) {
+            const baseDelay = stepIndex * 5000; // Base delay between different LSP sources
+            const propagationDelay = 1000; // Delay between hops
+            let visitedPairs = new Set(); // Track which links we've animated
+            
+            // Function to animate LSP propagation recursively
+            function propagateLSP(currentRouter, seenRouters = new Set(), level = 0) {
+                const neighbors = getRouterNeighbors(currentRouter);
+                seenRouters.add(currentRouter);
+                
+                neighbors.forEach(neighbor => {
+                    // Create unique identifier for this link in both directions
+                    const linkId1 = `${currentRouter}-${neighbor}`;
+                    const linkId2 = `${neighbor}-${currentRouter}`;
+                    
+                    // Check if we haven't animated this link yet and neighbor hasn't been source
+                    if (!visitedPairs.has(linkId1) && !visitedPairs.has(linkId2) && 
+                        !seenRouters.has(neighbor)) {
+                        
+                        visitedPairs.add(linkId1);
+                        visitedPairs.add(linkId2);
+                        
+                        // Calculate delay based on propagation level
+                        const delay = baseDelay + (level * propagationDelay);
+                        
+                        // Animate LSP packet
+                        setTimeout(() => {
+                            animateLSPPacket(currentRouter, neighbor, () => {
+                                // After packet reaches neighbor, continue flooding from there
+                                propagateLSP(neighbor, seenRouters, level + 1);
+                            });
+                        }, delay);
+                    }
+                });
+            }
+            
+            // Start flooding from source router
+            propagateLSP(step.source_router);
+        }
+        
+        function animateLSPPacket(sourceId, targetId, onComplete) {
+            const positions = network.getPositions([sourceId, targetId]);
+            const sourcePos = positions[sourceId];
+            const targetPos = positions[targetId];
+            
+            // Generate unique ID for the LSP packet
+            const packetId = `lsp-${sourceId}-${targetId}-${Date.now()}`;
+            
+            // Create a temporary node for the LSP packet
+            nodes.add({
+                id: packetId,
+                label: 'LSP',
+                size: 10,
+                shape: 'diamond',
+                color: {
+                    background: '#FFA500', // Orange color for LSP packets
+                    border: '#FF8C00',
+                    highlight: {
+                        background: '#FFA500',
+                        border: '#FF8C00'
+                    }
+                },
+                x: sourcePos.x,
+                y: sourcePos.y,
+                physics: false,
+                font: { 
+                    size: 8,
+                    color: '#000000',
+                    face: 'arial'
+                }
+            });
+        
+            // Animation parameters
+            const duration = 800; // Slightly faster than hello/reply packets
+            const frames = 60;
+            const delay = duration / frames;
+            let frame = 0;
+        
+            // Animation function
+            function animate() {
+                if (frame <= frames) {
+                    const progress = frame / frames;
+                    const x = sourcePos.x + (targetPos.x - sourcePos.x) * progress;
+                    const y = sourcePos.y + (targetPos.y - sourcePos.y) * progress;
+                    
+                    nodes.update({
+                        id: packetId,
+                        x: x,
+                        y: y
+                    });
+        
+                    frame++;
+                    setTimeout(animate, delay);
+                } else {
+                    // Remove the packet node when animation is complete
+                    nodes.remove(packetId);
+                    
+                    // Call the completion callback if provided
+                    if (onComplete) {
+                        setTimeout(onComplete, 100);
+                    }
+                }
+            }
+        
+            // Start animation
+            animate();
+        }
+        
+        function getRouterNeighbors(routerId) {
+            // Get all neighbors of a router from the network edges
+            const neighbors = new Set();
+            edges.get().forEach(edge => {
+                if (edge.from === routerId) {
+                    neighbors.add(edge.to);
+                } else if (edge.to === routerId) {
+                    neighbors.add(edge.from);
+                }
+            });
+            return Array.from(neighbors);
+        }
+        
+        // Helper function to highlight active routers during flooding
+        function highlightRouter(routerId, isActive) {
+            nodes.update({
+                id: routerId,
+                color: {
+                    background: isActive ? '#FFA500' : '#4CAF50', // Orange when active, back to green when done
+                    border: isActive ? '#FF8C00' : '#45a049'
+                }
+            });
         }
     
         function displayRoutingTables(routingTables) {
@@ -641,21 +826,137 @@
     
         function startLSRProcess() {
             console.log("Starting LSR Process");
-            startNeighborDiscovery();
-            // You might want to chain these calls or use setTimeout to space them out
-            setTimeout(startLSPFlooding, 1000);
-            setTimeout(buildRoutingTables, 2000);
+            
+            // First start neighbor discovery
+            fetch('/start_discovery', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    routers: nodes.get().map(node => node.id),
+                    links: edges.get().map(edge => ({
+                        source: edge.from,
+                        target: edge.to,
+                        cost: parseInt(edge.label)
+                    }))
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Calculate total duration of neighbor discovery animations
+                const steps = data.steps;
+                const neighborsPerStep = steps.map(step => step.discovered_neighbors.length);
+                const totalNeighbors = neighborsPerStep.reduce((sum, count) => sum + count, 0);
+                
+                // Calculate total duration based on animation timings
+                const stepDelay = 4000; // Delay between router steps
+                const neighborDelay = 2500; // Delay between neighbors
+                const packetDuration = 2400; // Duration for hello + reply + gaps
+                
+                // Total duration = (number of steps × step delay) + (total neighbors × neighbor delay)
+                const totalDuration = (steps.length * stepDelay) + (totalNeighbors * neighborDelay);
+                
+                // Display neighbor discovery animations
+                displayNeighborDiscoverySteps(data.steps);
+                
+                // Start flooding after neighbor discovery completes
+                setTimeout(() => {
+                    console.log("Starting LSP Flooding");
+                    fetch('/start_flooding', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            routers: nodes.get().map(node => node.id),
+                            links: edges.get().map(edge => ({
+                                source: edge.from,
+                                target: edge.to,
+                                cost: parseInt(edge.label)
+                            }))
+                        })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        displayLSPFloodingSteps(data.steps);
+                        
+                        // Calculate total duration of flooding animations
+                        const floodingDuration = calculateFloodingDuration(data.steps);
+                        
+                        // Start routing table calculation after flooding completes
+                        setTimeout(() => {
+                            console.log("Building Routing Tables");
+                            buildRoutingTables();
+                        }, floodingDuration + 500); // Add 0.5 second buffer
+                    })
+                    .catch(error => {
+                        console.error('Error during LSP flooding:', error);
+                        alert('An error occurred during LSP flooding: ' + error.message);
+                    });
+                }, totalDuration + 500); // Add 0.5 second buffer between phases
+            })
+            .catch(error => {
+                console.error('Error during neighbor discovery:', error);
+                alert('An error occurred during neighbor discovery: ' + error.message);
+            });
         }
         
+        // Helper function to calculate flooding animation duration
+        function calculateFloodingDuration(steps) {
+            const baseDelay = 5000; // Base delay between different LSP sources
+            const propagationDelay = 1000; // Delay between hops
+            
+            // Calculate maximum network diameter (longest possible path)
+            const networkDiameter = calculateNetworkDiameter();
+            
+            // Total duration = (number of steps × base delay) + (max propagation levels × propagation delay)
+            return (steps.length * baseDelay) + (networkDiameter * propagationDelay);
+        }
+        
+        // Helper function to estimate network diameter
+        function calculateNetworkDiameter() {
+            const routerCount = nodes.get().length;
+            // Simple estimation - in worst case, might need to traverse all nodes
+            // In practice, this is usually less, but we want to ensure enough time
+            return routerCount;
+        }
+        
+        // Function to reset any ongoing animations and network state
+        function resetNetworkState() {
+            // Clear any existing animations
+            nodes.get().forEach(node => {
+                nodes.update({
+                    id: node.id,
+                    color: {
+                        background: '#4CAF50',
+                        border: '#45a049'
+                    }
+                });
+            });
+            
+            edges.get().forEach(edge => {
+                edges.update({
+                    id: edge.id,
+                    color: { color: '#848484' },
+                    width: 2
+                });
+            });
+        }
+        
+        // Update the individual phase functions to reset state before starting
         function showNeighborDiscovery() {
+            resetNetworkState();
             startNeighborDiscovery();
         }
         
         function showFlooding() {
+            resetNetworkState();
             startLSPFlooding();
         }
         
         function showRoutingTables() {
+            resetNetworkState();
             buildRoutingTables();
         }
         
