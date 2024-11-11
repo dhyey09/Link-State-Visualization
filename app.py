@@ -14,14 +14,17 @@ class Router:
         self.routing_table = {}  # {destination: {'next_hop': router, 'cost': cost}}
         self.sequence_number = 0
         
-    def create_lsp(self):
-        """Create Link State Packet"""
+    def create_lsp(self, max_forwards=3):  # Default max forwards of 3
+        """Create Link State Packet with Maximum Forwards"""
         self.sequence_number += 1
         return {
-            'router_id': self.name,
-            'sequence_number': self.sequence_number,
-            'neighbors': self.neighbors
-        }
+        'router_id': self.name,
+        'sequence_number': self.sequence_number,
+        'neighbors': self.neighbors,
+        'max_forwards': max_forwards,  # Maximum number of times packet can be forwarded
+        'forwards_used': 0,  # Track number of times forwarded
+        'creation_time': datetime.now().isoformat()
+    }
         
     def add_neighbor(self, neighbor, cost):
         self.neighbors[neighbor] = cost
@@ -93,7 +96,7 @@ def start_discovery():
 def start_flooding():
     data = request.get_json()
     network = create_network(data['routers'], data['links'])
-    flooding_steps = simulate_flooding(network)
+    flooding_steps = simulate_flooding(network,int(data['TTL']))
     return jsonify({'steps': flooding_steps})
 
 @app.route('/build_routing_tables', methods=['POST'])
@@ -161,23 +164,36 @@ def simulate_neighbor_discovery(network):
         steps.append(step)
     return steps
 
-def simulate_flooding(network):
-    """Simulate the LSP flooding process"""
+def simulate_flooding(network, max_forwards=3):
+    """Simulate the LSP flooding process with forward limit"""
     steps = []
     for router_name, router in network.items():
-        lsp = router.create_lsp()
-        # Simulate flooding to all other routers
+        lsp = router.create_lsp(max_forwards=max_forwards)
+        
         flood_step = {
             'source_router': router_name,
             'lsp': lsp,
-            'reached_routers': list(network.keys()),
+            'reached_routers': [],
+            'dropped_routers': [],
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        steps.append(flood_step)
         
-        # Update LSDBs of all routers
-        for target_router in network.values():
-            target_router.update_lsdb(lsp)
+        # Track routers that receive and drop the packet
+        for target_router_name, target_router in network.items():
+            if target_router_name != router_name:
+                # Create a copy of LSP to track forwarding
+                forwarded_lsp = lsp.copy()
+                forwarded_lsp['forwards_used'] += 1
+                
+                if forwarded_lsp['forwards_used'] <= forwarded_lsp['max_forwards']:
+                    # Successful packet transmission
+                    target_router.update_lsdb(forwarded_lsp)
+                    flood_step['reached_routers'].append(target_router_name)
+                else:
+                    # Packet dropped due to max forwards reached
+                    flood_step['dropped_routers'].append(target_router_name)
+        
+        steps.append(flood_step)
     
     return steps
 

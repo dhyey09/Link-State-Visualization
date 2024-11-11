@@ -56,6 +56,10 @@ function initNetwork() {
                     enabled: false
                 }
             }
+        },
+        // Disable zooming
+        interaction: {
+            zoomView: false // Prevent zooming
         }
     };
     network = new vis.Network(container, networkData, options);
@@ -424,8 +428,9 @@ function startLSPFlooding() {
             links: edges.get().map(edge => ({
                 source: edge.from,
                 target: edge.to,
-                cost: parseInt(edge.label)
-            }))
+                cost: parseInt(edge.label),
+            })),
+            TTL: document.getElementById("maxForwards").value
         })
     })
         .then(response => response.json())
@@ -465,6 +470,8 @@ function buildRoutingTables() {
 
 function displayNeighborDiscoverySteps(steps) {
     let stepsHtml = '<h3>Neighbor Discovery Steps:</h3>';
+    const animatedPairs = new Set();  // To track animated pairs
+
     steps.forEach((step, index) => {
         stepsHtml += `
                     <div class="step-card">
@@ -472,19 +479,23 @@ function displayNeighborDiscoverySteps(steps) {
                         <div class="step-detail">Discovered Neighbors: ${step.discovered_neighbors.join(', ')}</div>
                         <div class="step-detail">Link Costs: ${Object.entries(step.costs).map(([neighbor, cost]) => `${neighbor}: ${cost}`).join(', ')}</div>
                     </div>`;
-        // Animate both hello packets and reply packets with delays
-        step.discovered_neighbors.forEach((neighbor, neighborIndex) => {
-            // Hello packet animation (outgoing) - Red color
-            setTimeout(() => {
-                animatePacketOnCanvas(step.router, neighbor, false);  // Hello packet
-            }, (index * 3000) + (neighborIndex * 2300));
 
-            // Reply packet animation (incoming) - Green color
-            setTimeout(() => {
-                animatePacketOnCanvas(neighbor, step.router, true);  // Reply packet
-            }, (index * 3000) + (neighborIndex * 2000) + 2000);
+        step.discovered_neighbors.forEach((neighbor) => {
+            const requestKey = `${step.router}-${neighbor}`;
+            const replyKey = `${neighbor}-${step.router}`;
+            if (!(animatedPairs.has(requestKey) || (animatedPairs.has(replyKey)))) {
+                setTimeout(() => {
+                    animatePacketOnCanvas(step.router, neighbor, false);  // Hello packet
+                }, index * 3000);
+                setTimeout(() => {
+                    animatePacketOnCanvas(neighbor, step.router, true);  // Reply packet
+                }, index * 3000 + 2000);
+                animatedPairs.add(requestKey);  // Mark this pair as animated
+                animatedPairs.add(replyKey);  // Mark this pair as animated
+            }
         });
     });
+
     document.getElementById('stepHistory').innerHTML = stepsHtml;
 }
 
@@ -492,82 +503,93 @@ function displayLSPFloodingSteps(steps) {
     let stepsHtml = '<h3>LSP Flooding Steps:</h3>';
     steps.forEach((step, index) => {
         stepsHtml += `
-                    <div class="step-card">
-                        <h4>Step ${index + 1}: LSP from Router ${step.source_router}</h4>
-                        <div class="step-detail">LSP Content: ${JSON.stringify(step.lsp)}</div>
-                        <div class="step-detail">Reached Routers: ${step.reached_routers.join(', ')}</div>
-                    </div>`;
+            <div class="step-card">
+                <h4>Step ${index + 1}: LSP from Router ${step.source_router}</h4>
+                <div class="step-detail">LSP Content: ${JSON.stringify(step.lsp)}</div>
+                <div class="step-detail">Reached Routers: ${step.reached_routers.join(', ')}</div>
+                <div class="step-detail">Dropped Routers: ${step.dropped_routers.join(', ')}</div>
+                <div class="step-detail">Max Forwards: ${step.lsp.max_forwards}</div>
+                <div class="step-detail">Forwards Used: ${step.lsp.forwards_used}</div>
+            </div>`;
 
-        // Animate LSP flooding from source router
-        animateFloodingStep(step, index);
+        // Modify animation to show forwarding limit impact
+        animateFloodingStepWithForwardLimit(step, index);
     });
     document.getElementById('stepHistory').innerHTML = stepsHtml;
 }
 
-function animateFloodingStep(step, stepIndex) {
-    const baseDelay = stepIndex * 5000; // Base delay between different LSP sources
-    const propagationDelay = 1000; // Delay between hops
-    let visitedPairs = new Set(); // Track which links we've animated
+function animateFloodingStepWithForwardLimit(step, stepIndex) {
+    const baseDelay = stepIndex * 5000;
+    const propagationDelay = 1000;
+    let visitedPairs = new Set();
 
-    // Function to animate LSP propagation recursively
-    function propagateLSP(currentRouter, seenRouters = new Set(), level = 0) {
+    function propagateLSP(currentRouter, seenRouters = new Set(), level = 0, forwardsUsed = 0) {
+        // Check if max forwards has been reached
+        if (forwardsUsed >= step.lsp.max_forwards) {
+            return;
+        }
+
         const neighbors = getRouterNeighbors(currentRouter);
         seenRouters.add(currentRouter);
 
         neighbors.forEach(neighbor => {
-            // Create unique identifier for this link in both directions
             const linkId1 = `${currentRouter}-${neighbor}`;
             const linkId2 = `${neighbor}-${currentRouter}`;
 
-            // Check if we haven't animated this link yet and neighbor hasn't been source
-            if (!visitedPairs.has(linkId1) && !visitedPairs.has(linkId2) &&
-                !seenRouters.has(neighbor)) {
-
+            if (!visitedPairs.has(linkId1) && !visitedPairs.has(linkId2) && !seenRouters.has(neighbor)) {
                 visitedPairs.add(linkId1);
                 visitedPairs.add(linkId2);
 
-                // Calculate delay based on propagation level
                 const delay = baseDelay + (level * propagationDelay);
 
-                // Animate LSP packet
                 setTimeout(() => {
-                    animateLSPPacket(currentRouter, neighbor, () => {
-                        // After packet reaches neighbor, continue flooding from there
-                        propagateLSP(neighbor, seenRouters, level + 1);
+                    animateLSPPacketWithForwardLimit(currentRouter, neighbor, forwardsUsed, step.lsp.max_forwards, () => {
+                        propagateLSP(neighbor, seenRouters, level + 1, forwardsUsed + 1);
                     });
                 }, delay);
             }
         });
     }
 
-    // Start flooding from source router
     propagateLSP(step.source_router);
 }
 
-function animateLSPPacket(sourceId, targetId, onComplete) {
-    const positions = network.getPositions([sourceId, targetId]);
-    const sourcePos = positions[sourceId];
-    const targetPos = positions[targetId];
 
-    // Generate unique ID for the LSP packet
+function animateLSPPacketWithForwardLimit(sourceId, targetId, forwardsUsed, maxForwards, onComplete) {
     const packetId = `lsp-${sourceId}-${targetId}-${Date.now()}`;
 
-    // Create a temporary node for the LSP packet
+    // Determine packet color based on forwards used
+    const forwardsRemaining = maxForwards - forwardsUsed;
+    let backgroundColor, borderColor;
+
+    if (forwardsUsed > 0) {
+        if (forwardsRemaining > 2) {
+            backgroundColor = '#FFA500';  // Orange
+            borderColor = '#FF8C00';
+        } else if (forwardsRemaining > 0) {
+            backgroundColor = '#FF4500';  // Dark Orange
+            borderColor = '#FF0000';
+        }
+    }
+    else {
+        backgroundColor = '#42e3f5';  // Dark Orange
+        borderColor = '#fafafa';
+    }
     nodes.add({
         id: packetId,
-        label: 'LSP',
-        size: 10,
+        label: `LSP (Fwd: ${forwardsUsed}/${maxForwards})`,
+        size: 10 + (forwardsRemaining * 2),  // Packet size varies with remaining forwards
         shape: 'diamond',
         color: {
-            background: '#FFA500', // Orange color for LSP packets
-            border: '#FF8C00',
+            background: backgroundColor,
+            border: borderColor,
             highlight: {
-                background: '#FFA500',
-                border: '#FF8C00'
+                background: backgroundColor,
+                border: borderColor
             }
         },
-        x: sourcePos.x,
-        y: sourcePos.y,
+        x: network.getPositions([sourceId])[sourceId].x,
+        y: network.getPositions([sourceId])[sourceId].y,
         physics: false,
         font: {
             size: 8,
@@ -576,13 +598,16 @@ function animateLSPPacket(sourceId, targetId, onComplete) {
         }
     });
 
-    // Animation parameters
-    const duration = 800; // Slightly faster than hello/reply packets
+    // Animation logic remains similar to previous implementation
+    const positions = network.getPositions([sourceId, targetId]);
+    const sourcePos = positions[sourceId];
+    const targetPos = positions[targetId];
+
+    const duration = 1500;
     const frames = 60;
     const delay = duration / frames;
     let frame = 0;
 
-    // Animation function
     function animate() {
         if (frame <= frames) {
             const progress = frame / frames;
